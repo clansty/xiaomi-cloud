@@ -310,6 +310,7 @@ class XiaomiCloudDataUpdateCoordinator(DataUpdateCoordinator):
                         device_info["device_accuracy"] = int(location_info_json['accuracy'])
                         device_info["device_lon"] = location_info_json['longitude']
                         device_info["coordinate_type"] = location_info_json['coordinateType']
+                        device_info["address"] = location_info_json['address']
 
                         device_info["device_power"] = data['data']['location']['receipt'].get('powerLevel',0)
                         device_info["device_phone"] = data['data']['location']['receipt'].get('phone',0)
@@ -363,6 +364,7 @@ class XiaomiCloudDataUpdateCoordinator(DataUpdateCoordinator):
                         device_info["device_accuracy"] = int(location_info_json['accuracy'])
                         device_info["device_lon"] = location_info_json['longitude']
                         device_info["coordinate_type"] = location_info_json['coordinateType']
+                        device_info["address"] = location_info_json['address']
 
                         device_info["device_power"] = listObj['location']['receipt'].get('powerLevel',0)
                         device_info["device_phone"] = listObj['location']['receipt'].get('phone',0)

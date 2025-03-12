@@ -23,24 +23,25 @@ async def async_setup_entry(hass: HomeAssistant, config_entry, async_add_entitie
 
     coordinator = hass.data[DOMAIN][config_entry.entry_id][COORDINATOR]
     devices = []
-    for i in range(len(coordinator.data)):
-        devices.append(XiaomiDeviceEntity(hass, coordinator, i))
-        _LOGGER.debug("device is : %s", i)
+    for i in coordinator.data:
+        devices.append(XiaomiDeviceEntity(hass, coordinator, i["imei"]))
+        _LOGGER.debug("device is : %s", i["imei"])
     async_add_entities(devices, True)
 
 class XiaomiDeviceEntity(TrackerEntity, RestoreEntity, Entity):
     """Represent a tracked device."""
 
-    def __init__(self, hass, coordinator, vin) -> None:
+    def __init__(self, hass, coordinator, imei) -> None:
         """Set up Geofency entity."""
         self._hass = hass
-        self._vin = vin
+        self._imei = imei
         self.coordinator = coordinator  
-        self._unique_id = coordinator.data[vin]["imei"]    
-        self._name = coordinator.data[vin]["model"]
-        self._icon = "mdi:cellphone-android"
-        self._entity_picture = coordinator.data[vin].get("avatar", None)
-        self.sw_version = coordinator.data[vin]["version"]
+        data = next((item for item in coordinator.data if item["imei"] == imei), None)
+        self._unique_id = data["imei"]    
+        self._name = data["model"]
+        self._icon = "mdi:cellphone"
+        self._entity_picture = data.get("avatar", None)
+        self.sw_version = data["version"]
 
     async def async_update(self):
         """Update Colorfulclouds entity."""   
@@ -62,16 +63,19 @@ class XiaomiDeviceEntity(TrackerEntity, RestoreEntity, Entity):
     @property
     def battery_level(self):
         """Return battery value of the device."""
-        return self.coordinator.data[self._vin]["device_power"]
+        data = next((item for item in self.coordinator.data if item["imei"] == self._imei), None)
+        return data["device_power"]
 
     @property
-    def device_state_attributes(self):
+    def extra_state_attributes(self):
         """Return device specific attributes."""
+        data = next((item for item in self.coordinator.data if item["imei"] == self._imei), None)
         attrs = {
-            "last_update": self.coordinator.data[self._vin]["device_location_update_time"],
-            "coordinate_type": self.coordinator.data[self._vin]["coordinate_type"],
-            "device_phone": self.coordinator.data[self._vin]["device_phone"],
-            "imei": self.coordinator.data[self._vin]["imei"],
+            "last_update": data["device_location_update_time"],
+            "coordinate_type": data["coordinate_type"],
+            "device_phone": data["device_phone"],
+            "imei": data["imei"],
+            "entity_picture2": self._entity_picture,
         }
 
         return attrs
@@ -79,17 +83,20 @@ class XiaomiDeviceEntity(TrackerEntity, RestoreEntity, Entity):
     @property
     def latitude(self):
         """Return latitude value of the device."""
-        return self.coordinator.data[self._vin]["device_lat"]
+        data = next((item for item in self.coordinator.data if item["imei"] == self._imei), None)
+        return data["device_lat"]
 
     @property
     def longitude(self):
         """Return longitude value of the device."""
-        return self.coordinator.data[self._vin]["device_lon"]
+        data = next((item for item in self.coordinator.data if item["imei"] == self._imei), None)
+        return data["device_lon"]
 
     @property
     def location_accuracy(self):
         """Return the gps accuracy of the device."""
-        return self.coordinator.data[self._vin]["device_accuracy"]
+        data = next((item for item in self.coordinator.data if item["imei"] == self._imei), None)
+        return data["device_accuracy"]
 
     @property
     def icon(self):
@@ -132,10 +139,4 @@ class XiaomiDeviceEntity(TrackerEntity, RestoreEntity, Entity):
     @property
     def entity_picture(self):
         return self._entity_picture
-
-    @property
-    def entity_picture2(self):
-        return self._entity_picture
-
-        
 
