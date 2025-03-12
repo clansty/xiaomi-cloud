@@ -39,6 +39,7 @@ class XiaomiDeviceEntity(TrackerEntity, RestoreEntity, Entity):
         self._unique_id = coordinator.data[vin]["imei"]    
         self._name = coordinator.data[vin]["model"]
         self._icon = "mdi:cellphone-android"
+        self._entity_picture = coordinator.data[vin].get("avatar", None)
         self.sw_version = coordinator.data[vin]["version"]
 
     async def async_update(self):
@@ -127,6 +128,14 @@ class XiaomiDeviceEntity(TrackerEntity, RestoreEntity, Entity):
     def source_type(self):
         """Return the source type, eg gps or router, of the device."""
         return SourceType.GPS
+
+    @property
+    def entity_picture(self):
+        return self._entity_picture
+
+    @property
+    def entity_picture2(self):
+        return self._entity_picture
 
         
 

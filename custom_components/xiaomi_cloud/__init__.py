@@ -59,9 +59,7 @@ async def async_setup_entry(hass, config_entry) -> bool:
         COORDINATOR: coordinator,
         UNDO_UPDATE_LISTENER: undo_listener,
     }
-    hass.async_create_task(
-        hass.config_entries.async_forward_entry_setup(config_entry, DEVICE_TRACKER)
-    )
+    await hass.config_entries.async_forward_entry_setup(config_entry, DEVICE_TRACKER)
 
     async def services(call):
         """Handle the service call."""

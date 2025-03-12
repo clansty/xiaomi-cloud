@@ -33,7 +33,8 @@ class XiaomiCloudDataUpdateCoordinator(DataUpdateCoordinator):
         self._password = password
         self._headers = {}
         self._cookies = {}
-        self._device_info = {}
+        self._device_info = []
+        self._users_info = []
         self._serviceLoginAuth2_json = {}
         self._sign = None
         self._scan_interval = scan_interval
@@ -140,7 +141,26 @@ class XiaomiCloudDataUpdateCoordinator(DataUpdateCoordinator):
         except BaseException as e:
             _LOGGER.warning(e.args[0])
             return False  
-    
+
+    async def _get_all_user_info(self, session):
+        url = 'https://i.mi.com/find/device/share/allUserInfo?ts={}'.format(
+            int(round(time.time() * 1000)))
+        get_all_user_header = {'Cookie': 'userId={};serviceToken={}'.format(
+            self.userId, self._Service_Token)}
+        try:
+            with async_timeout.timeout(15):
+                r = await session.get(url, headers=get_all_user_header)
+            if r.status == 200:
+                _LOGGER.debug('_get_all_user_info',json.loads(await r.text())['data']['userInfo'])
+                data = json.loads(await r.text())['data']['userInfo']
+                self._users_info = data
+                return True
+            else:
+                return False
+        except:
+            _LOGGER.warning(traceback.format_exc())
+            return False
+
     async def _send_find_device_command(self, session:aiohttp.ClientSession):
         flag = True
         for vin in self._device_info:
@@ -265,15 +285,16 @@ class XiaomiCloudDataUpdateCoordinator(DataUpdateCoordinator):
                 with async_timeout.timeout(15):
                     r = await session.get(url, headers=_send_find_device_command_header)
                 if r.status == 200:
-                    _LOGGER.info(f"get_device_location_data,user:{self.userId},imei:{imei},model:{model} ,res: {json.loads(await r.text())}")
+                    data = json.loads(await r.text())
+                    _LOGGER.info(f"get_device_location_data,user:{self.userId},imei:{imei},model:{model} ,res: {data}")
 
-                    if "receipt" in json.loads(await r.text())['data']['location']:
-                        gpsInfoTransformed = json.loads(await r.text())['data']['location']['receipt']['gpsInfoTransformed']
+                    if "receipt" in data['data']['location']:
+                        gpsInfoTransformed = data['data']['location']['receipt']['gpsInfoTransformed']
 
                         device_info = {}
                         location_info_json = {}
                         if self._coordinate_type == "original":
-                            location_info_json = json.loads(await r.text())['data']['location']['receipt']['gpsInfo']
+                            location_info_json = data['data']['location']['receipt']['gpsInfo']
                             # wgs84 = self.GCJ2WGS(gpsInfoExtra[0]['longitude'],gpsInfoExtra[0]['latitude'])
                             # _LOGGER.debug("get_device_location_data_wgs84: %s", wgs84)
                             # location_info_json = {
@@ -290,16 +311,67 @@ class XiaomiCloudDataUpdateCoordinator(DataUpdateCoordinator):
                         device_info["device_lon"] = location_info_json['longitude']
                         device_info["coordinate_type"] = location_info_json['coordinateType']
 
-                        device_info["device_power"] = json.loads(
-                            await r.text())['data']['location']['receipt'].get('powerLevel',0)
-                        device_info["device_phone"] = json.loads(
-                            await r.text())['data']['location']['receipt'].get('phone',0)
-                        timeArray = time.localtime(int(json.loads(
-                            await r.text())['data']['location']['receipt']['infoTime']) / 1000)
+                        device_info["device_power"] = data['data']['location']['receipt'].get('powerLevel',0)
+                        device_info["device_phone"] = data['data']['location']['receipt'].get('phone',0)
+                        timeArray = time.localtime(int(data['data']['location']['receipt']['infoTime']) / 1000)
                         device_info["device_location_update_time"] = time.strftime("%Y-%m-%d %H:%M:%S", timeArray)
                         device_info["imei"] = imei
                         device_info["model"] = model
                         device_info["version"] = version
+                        devices_info.append(device_info)
+                    else:
+                        self.login_result = False
+                else:
+                    self.login_result = False
+            except BaseException as e:
+                self.login_result = False
+                _LOGGER.error(e)
+        return devices_info
+
+    async def _get_device_location_share(self, session:aiohttp.ClientSession):
+        devices_info = []
+        for user in self._users_info:
+            if user["sharePermission"]["findRelationType"] == "own":
+                continue
+            imei = user["sharePermission"]["shareFid"] 
+            model = user["userInfo"]["nickname"]
+            toUser = user["userInfo"]["userId"]
+            url = 'https://i.mi.com/find/device/share/status?{}'.format(
+                parse.urlencode({"ts": int(round(time.time() * 1000)), "ids": json.dumps([{"userId": toUser, "fid": imei}])}))
+            _LOGGER.info(f"req url {url}")
+            _send_find_device_command_header = {
+                'Cookie': 'userId={};serviceToken={}'.format(self.userId, self._Service_Token)}
+            try:
+                with async_timeout.timeout(15):
+                    r = await session.get(url, headers=_send_find_device_command_header)
+                if r.status == 200:
+                    data = json.loads(await r.text())
+                    _LOGGER.info(f"get_device_location_share,user:{self.userId},imei:{imei},toUser:{toUser} ,res: {data}")
+                    listObj = data['data']['list'][0]
+
+                    if "receipt" in listObj['location']:
+                        gpsInfoTransformed = listObj['location']['receipt']['gpsInfoTransformed']
+
+                        device_info = {}
+                        location_info_json = {}
+                        if self._coordinate_type == "original":
+                            location_info_json = listObj['location']['receipt']['gpsInfo']
+                        else:
+                            location_info_json = next((item for item in gpsInfoTransformed if item.get('coordinateType') == self._coordinate_type), None)
+
+                        device_info["device_lat"] = location_info_json['latitude']
+                        device_info["device_accuracy"] = int(location_info_json['accuracy'])
+                        device_info["device_lon"] = location_info_json['longitude']
+                        device_info["coordinate_type"] = location_info_json['coordinateType']
+
+                        device_info["device_power"] = listObj['location']['receipt'].get('powerLevel',0)
+                        device_info["device_phone"] = listObj['location']['receipt'].get('phone',0)
+                        timeArray = time.localtime(int(listObj['location']['receipt']['infoTime']) / 1000)
+                        device_info["device_location_update_time"] = time.strftime("%Y-%m-%d %H:%M:%S", timeArray)
+                        device_info["imei"] = imei
+                        device_info["version"] = listObj["version"]
+                        device_info["model"] = model
+                        device_info["avatar"] = user["userInfo"]["icon"]
                         devices_info.append(device_info)
                     else:
                         self.login_result = False
@@ -352,11 +424,19 @@ class XiaomiCloudDataUpdateCoordinator(DataUpdateCoordinator):
                     tmp = await self._send_find_device_command(session)
                 if tmp is True:
                     await asyncio.sleep(15)
-                    tmp = await self._get_device_location(session)
-                    if not tmp:
+                    tmp = []
+                    res1 = await self._get_device_location(session)
+                    if not res1:
                         _LOGGER.info("_get_device_location0 Failed")
                     else:
                         _LOGGER.info("_get_device_location0 succeed")
+                        tmp += res1
+                    res2 = await self._get_device_location_share(session)
+                    if not res2:
+                        _LOGGER.info("_get_device_location_share0 Failed")
+                    else:
+                        _LOGGER.info("_get_device_location_share0 succeed")
+                        tmp += res2
                 else:
                     _LOGGER.info("send_command Failed")
             else:
@@ -381,24 +461,37 @@ class XiaomiCloudDataUpdateCoordinator(DataUpdateCoordinator):
                                         _LOGGER.warning('get_device info Failed')
                                     else:
                                         _LOGGER.info("get_device info succeed")
-                                        self.login_result = True
-                                        if self.service == "noise":
-                                            tmp = await self._send_noise_command(session)
-                                        elif self.service == 'lost':
-                                            tmp = await self._send_lost_command(session)
-                                        elif self.service == 'clipboard':
-                                            tmp = await self._send_clipboard_command(session)
+                                        tmp = await self._get_all_user_info(session)
+                                        if not tmp:
+                                            _LOGGER.warning('_get_all_user_info Failed')
                                         else:
-                                            tmp = await self._send_find_device_command(session)
-                                        if tmp is True:
-                                            await asyncio.sleep(5)
-                                            tmp = await self._get_device_location(session)
-                                            if not tmp:
-                                                _LOGGER.info("_get_device_location1 Failed")
+                                            _LOGGER.info("_get_all_user_info succeed")
+                                            self.login_result = True
+                                            if self.service == "noise":
+                                                tmp = await self._send_noise_command(session)
+                                            elif self.service == 'lost':
+                                                tmp = await self._send_lost_command(session)
+                                            elif self.service == 'clipboard':
+                                                tmp = await self._send_clipboard_command(session)
                                             else:
-                                                _LOGGER.info("_get_device_location1 succeed")
-                                        else:
-                                            _LOGGER.info("send_command Failed")
+                                                tmp = await self._send_find_device_command(session)
+                                            if tmp is True:
+                                                await asyncio.sleep(5)
+                                                tmp = []
+                                                res1 = await self._get_device_location(session)
+                                                if not res1:
+                                                    _LOGGER.info("_get_device_location1 Failed")
+                                                else:
+                                                    _LOGGER.info("_get_device_location1 succeed")
+                                                    tmp += res1
+                                                res2 = await self._get_device_location_share(session)
+                                                if not res2:
+                                                    _LOGGER.info("_get_device_location_share1 Failed")
+                                                else:
+                                                    _LOGGER.info("_get_device_location_share1 succeed")
+                                                    tmp += res2
+                                            else:
+                                                _LOGGER.info("send_command Failed")
 
         except (
             ClientConnectorError
