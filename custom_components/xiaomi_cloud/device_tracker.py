@@ -81,6 +81,16 @@ class XiaomiDeviceEntity(TrackerEntity, RestoreEntity, Entity):
         return attrs
 
     @property
+    def address(self):
+        data = next((item for item in self.coordinator.data if item["imei"] == self._imei), None)
+        return data["address"]
+
+    @property
+    def state(self):
+        data = next((item for item in self.coordinator.data if item["imei"] == self._imei), None)
+        return data["address"]
+
+    @property
     def latitude(self):
         """Return latitude value of the device."""
         data = next((item for item in self.coordinator.data if item["imei"] == self._imei), None)

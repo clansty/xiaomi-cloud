@@ -153,13 +153,69 @@ class XiaomiCloudDataUpdateCoordinator(DataUpdateCoordinator):
             if r.status == 200:
                 _LOGGER.debug('_get_all_user_info',json.loads(await r.text())['data']['userInfo'])
                 data = json.loads(await r.text())['data']['userInfo']
+                
+                # 获取每个共享用户的设备详细信息
+                for user in data:
+                    if user["sharePermission"]["findRelationType"] == "own":
+                        continue
+                    toUserId = user["userInfo"]["userId"]
+                    detail_url = f'https://i.mi.com/find/device/share/full/status?ts={int(round(time.time() * 1000))}&toUserId={toUserId}'
+                    try:
+                        with async_timeout.timeout(15):
+                            detail_r = await session.get(detail_url, headers=get_all_user_header)
+                        if detail_r.status == 200:
+                            detail_data = json.loads(await detail_r.text())
+                            _LOGGER.debug('get_device_detail for user %s: %s', toUserId, detail_data)
+                            if detail_data.get('code') == 0 and detail_data.get('data', {}).get('devices'):
+                                # 获取设备的 devId
+                                device = detail_data['data']['devices'][0]  # 假设每个用户只分享了一个设备
+                                user['devId'] = device.get('devId')
+                                
+                                # 获取 resourceId
+                                if user['devId']:
+                                    resource_id = await self._get_resource_id(session, user["sharePermission"]["shareFid"], user["userInfo"]["userId"])
+                                    if resource_id:
+                                        user['resourceId'] = resource_id
+                                    
+                    except BaseException as e:
+                        _LOGGER.warning(f"Failed to get device detail for user {toUserId}: {str(e)}")
+                
                 self._users_info = data
                 return True
             else:
                 return False
-        except:
-            _LOGGER.warning(traceback.format_exc())
+        except BaseException as e:
+            _LOGGER.warning(e)
             return False
+
+    async def _get_resource_id(self, session:aiohttp.ClientSession, imei: str, toUserId: int):
+        url = 'https://i.mi.com/passport/lite/device/share/resourceId'
+        headers = {
+            'accept': '*/*',
+            'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'origin': 'https://i.mi.com',
+            'referer': 'https://i.mi.com/find/share/h5',
+            'Cookie': 'userId={};serviceToken={}'.format(self.userId, self._Service_Token)
+        }
+        data = {
+            'devIds': json.dumps([{
+                'devId': imei,
+                'userId': str(toUserId)
+            }]),
+            'serviceToken': self._Service_Token
+        }
+        try:
+            with async_timeout.timeout(15):
+                r = await session.post(url, headers=headers, data=data)
+            if r.status == 200:
+                data = json.loads(await r.text())
+                _LOGGER.debug("get_resource_id res: %s", data)
+                if data['code'] == 0 and data.get('data', {}).get('list'):
+                    # 获取第一个设备的 resourceId
+                    return data['data']['list'][0]['resourceId']
+        except BaseException as e:
+            _LOGGER.warning(e.args[0])
+        return None
 
     async def _send_find_device_command(self, session:aiohttp.ClientSession):
         flag = True
@@ -175,6 +231,46 @@ class XiaomiCloudDataUpdateCoordinator(DataUpdateCoordinator):
                 with async_timeout.timeout(15):
                     r = await session.post(url, headers=_send_find_device_command_header, data=data)
                 _LOGGER.info("find_device res: %s", await r.json())
+                if r.status == 200:
+                    flag = True
+                else:
+                    flag = False
+                    self.login_result = False
+            except BaseException as e:
+                _LOGGER.warning(e.args[0])
+                self.login_result = False
+                flag = False
+        return flag
+    
+    async def _send_find_device_command_share(self, session:aiohttp.ClientSession):
+        flag = True
+        for user in self._users_info:
+            if user["sharePermission"]["findRelationType"] == "own":
+                continue
+            
+            if not user.get('resourceId'):
+                _LOGGER.warning(f"No resourceId found for user {user['userInfo']['userId']}")
+                continue
+                
+            imei = user["sharePermission"]["shareFid"]
+            toUserId = user["userInfo"]["userId"]
+            resourceId = user['resourceId']
+            
+            url = 'https://i.mi.com/find/device/share/{}/location'.format(resourceId)
+            _send_find_device_command_header = {
+                'Cookie': 'userId={};serviceToken={}'.format(self.userId, self._Service_Token)}
+            data = {
+                'toUserId': str(toUserId),
+                'imei': imei,
+                'auto': 'true',
+                'channel': 'web',
+                'resourceId': resourceId,
+                'serviceToken': self._Service_Token
+            }
+            try:
+                with async_timeout.timeout(15):
+                    r = await session.post(url, headers=_send_find_device_command_header, data=data)
+                _LOGGER.info("find_device_share res: %s", await r.json())
                 if r.status == 200:
                     flag = True
                 else:
@@ -288,6 +384,9 @@ class XiaomiCloudDataUpdateCoordinator(DataUpdateCoordinator):
                     data = json.loads(await r.text())
                     _LOGGER.info(f"get_device_location_data,user:{self.userId},imei:{imei},model:{model} ,res: {data}")
 
+                    if data['code'] != 0:
+                        self.login_result = False
+                        continue
                     if "receipt" in data['data']['location']:
                         gpsInfoTransformed = data['data']['location']['receipt']['gpsInfoTransformed']
 
@@ -321,7 +420,7 @@ class XiaomiCloudDataUpdateCoordinator(DataUpdateCoordinator):
                         device_info["version"] = version
                         devices_info.append(device_info)
                     else:
-                        self.login_result = False
+                        pass
                 else:
                     self.login_result = False
             except BaseException as e:
@@ -367,7 +466,7 @@ class XiaomiCloudDataUpdateCoordinator(DataUpdateCoordinator):
                         device_info["address"] = location_info_json['address']
 
                         device_info["device_power"] = listObj['location']['receipt'].get('powerLevel',0)
-                        device_info["device_phone"] = listObj['location']['receipt'].get('phone',0)
+                        device_info["device_phone"] = user["userInfo"]["phone"]
                         timeArray = time.localtime(int(listObj['location']['receipt']['infoTime']) / 1000)
                         device_info["device_location_update_time"] = time.strftime("%Y-%m-%d %H:%M:%S", timeArray)
                         device_info["imei"] = imei
@@ -423,7 +522,7 @@ class XiaomiCloudDataUpdateCoordinator(DataUpdateCoordinator):
                 elif self.service == 'clipboard':
                     tmp = await self._send_clipboard_command(session)
                 elif self._scan_interval>0:
-                    tmp = await self._send_find_device_command(session)
+                    tmp = await self._send_find_device_command(session) and await self._send_find_device_command_share(session)
                 if tmp is True:
                     await asyncio.sleep(15)
                     tmp = []
@@ -476,9 +575,9 @@ class XiaomiCloudDataUpdateCoordinator(DataUpdateCoordinator):
                                             elif self.service == 'clipboard':
                                                 tmp = await self._send_clipboard_command(session)
                                             else:
-                                                tmp = await self._send_find_device_command(session)
+                                                tmp = await self._send_find_device_command(session) and await self._send_find_device_command_share(session)
                                             if tmp is True:
-                                                await asyncio.sleep(5)
+                                                await asyncio.sleep(15)
                                                 tmp = []
                                                 res1 = await self._get_device_location(session)
                                                 if not res1:
